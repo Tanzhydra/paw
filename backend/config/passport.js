@@ -6,8 +6,6 @@ const User = require('../models/userModel');
 console.log('Initializing Passport with Google Strategy');
 console.log('Callback URL:', process.env.GOOGLE_CALLBACK_URL);
 
-// REMOVED: serializeUser and deserializeUser - not needed for JWT-only serverless
-
 passport.use(new GoogleStrategy(
   {
     clientID: process.env.GOOGLE_CLIENT_ID,
@@ -23,32 +21,43 @@ passport.use(new GoogleStrategy(
         name: profile.displayName
       });
 
-      // Cari user berdasarkan email dari Google
       const userEmail = profile.emails[0].value;
       let user = await User.findOne({ email: userEmail });
       
+      // --- BAGIAN YANG DIPERBAIKI (AUTO REGISTER) ---
       if (!user) {
-        console.log('User not found with email:', userEmail);
-        return done(null, false, { 
-          message: 'Email tidak terdaftar. Silakan hubungi admin untuk registrasi.' 
+        console.log('User tidak ditemukan, membuat akun baru otomatis...');
+        
+        // Buat username dari nama google (hapus spasi, tambah angka acak biar unik)
+        const cleanName = profile.displayName.replace(/\s+/g, '').toLowerCase();
+        const randomSuffix = Math.floor(Math.random() * 1000);
+        
+        user = await User.create({
+            email: userEmail,
+            googleId: profile.id,
+            username: `${cleanName}${randomSuffix}`, // Contoh: fatanmakhsani123
+            photo: profile.photos[0]?.value,
+            role: 'user', // Default role user baru
+            // Password dummy karena login via Google (pastikan model User membolehkan ini)
+            password: 'GOOGLE_LOGIN_' + Date.now() 
         });
+        
+        console.log('User baru berhasil dibuat:', user.email);
+      } else {
+        console.log('User lama ditemukan:', user.email);
       }
-      
-      console.log('Found user:', user);
+      // ----------------------------------------------
 
-      // Update Google-specific fields
+      // Update data user (jika foto/googleId berubah)
       user.googleId = profile.id;
-      user.photo = profile.photos[0].value;
-      
-      // Jika user belum punya username, gunakan nama dari Google
-      if (!user.username || user.username === user.email) {
-        const baseUsername = profile.displayName.toLowerCase().replace(/\s+/g, '_');
-        user.username = baseUsername;
+      if (profile.photos[0]?.value) {
+          user.photo = profile.photos[0].value;
       }
       
       await user.save();
-      console.log('User updated successfully with username:', user.username);
+      console.log('User ready for token generation:', user.username);
       return done(null, user);
+
     } catch (error) {
       console.error('Error in Google Strategy:', error);
       return done(error, null);
